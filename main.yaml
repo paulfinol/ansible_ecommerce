@@ -1,0 +1,128 @@
+#ansible-2.9.27-1.el8.noarch
+#sudo ansible-galaxy collection install community.mysql
+#ansible-galaxy collection install ansible.posix
+
+- name: install services
+  hosts: target2
+  become: yes
+  vars:
+    service1:
+      - firewalld
+      - mariadb-server.x86_64
+      - httpd.x86_64
+      - git
+      - php
+      - php-mysqlnd.x86_64
+      - python3-PyMySQL.noarch
+    service:
+      - firewalld
+      - mariadb
+      - httpd
+  tasks:
+  - name: Install the latest version of service
+    yum:
+      name: "{{ item }}"
+      state: latest
+    loop: "{{ service1 }}"
+  - name: Start service, if not started
+    service:
+      name: "{{ item }}"
+      state: started
+    loop: "{{ service }}"
+  - name: Start systemd , if not started
+    systemd:
+      state: started
+      name: "{{ item }}"
+    loop: "{{ service }}"
+  # - name: get service facts
+  #   service_facts:
+  # - name: test services
+  #   debug:
+  #     var: ansible_facts.services["{{ service }}.service"]
+  #     loop: "{{ service }}"
+
+- name: configure firewall
+  hosts: target2
+  become: yes
+  tasks:
+    - name: permit traffic in default zone on port 3306/tcp
+      ansible.posix.firewalld:
+        port: "{{item.port}}/{{item.proto}}"
+        state: "{{item.state}}"
+        zone: "{{item.zone}}"
+        permanent: yes
+      with_items:
+       - {port: "80", proto: "tcp", state: "enabled", zone: "public" }
+       - {port: "3306", proto: "tcp", state: "enabled", zone: "public" }
+    - name: reload service firewalld
+      systemd:
+        name: firewalld
+        state: reloaded
+    - name: check output
+      shell: firewall-cmd --list-all
+      register: result
+      until: result.stdout.find("80/tcp 3306/tcp") != -1
+
+- name: configure database
+  hosts: target2
+  become: yes
+  tasks:
+- name: Ansible Copy Example Local to Remote
+  hosts: target1, target2
+  become: yes
+  tasks:
+    - name: copying file with playbook
+      become: true
+      copy:
+        src: /home/osboxes/ecommerce/dump.sql
+        dest: /tmp/
+        owner: osboxes
+        group: osboxes
+        mode: 0777
+    - name: Create database
+      community.mysql.mysql_db:
+        name: ecomdb
+        state: present
+    - name: create user and grant privileges
+      community.mysql.mysql_user:
+        name: ecomuser
+        host: "localhost"
+        priv: '*.*:ALL,GRANT'
+        state: present
+    - name: Reload privilege tables
+      command: |
+        mysql -ne "{{ item }}"
+      with_items:
+        - FLUSH PRIVILEGES
+      changed_when: False
+    - name: create tables
+      community.mysql.mysql_db:
+        name: my_db
+        state: import
+        target: /tmp/dump.sql
+
+
+- name: configure html
+  hosts: target2
+  become: yes
+  tasks:
+    - name: Delete content & directory
+      file:
+        state: absent
+        path: /var/www/html/
+    - name: clone git
+      git:
+        repo: 'https://github.com/kodekloudhub/learning-app-ecommerce.git'
+        dest: /var/www/html/
+        clone: yes
+        update: yes
+        force: yes
+    - name: replace inline
+      replace:
+        dest: /var/www/html/index.php
+        regexp: '172.20.1.01'
+        replace: '127.0.0.1'
+    - name: reload service httpd
+      systemd:
+        name: httpd
+        state: reloaded
